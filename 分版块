@@ -1,0 +1,717 @@
+#coding:utf-8
+import codeop
+import codecs
+import os
+import re
+import time 
+import random 
+import math 
+from nltk.parse.stanford import StanfordDependencyParser
+import jieba
+import pandas as pd
+import numpy as np
+from numpy import *
+from gensim import corpora, models
+import matplotlib
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.cluster import KMeans
+import urllib2
+import urllib
+from bs4 import BeautifulSoup
+import datetime
+import logging
+import collections
+from dateutil.relativedelta import relativedelta 
+import dateutil
+from pandas.tseries.tools import to_datetime
+
+def classify(identityfile):
+    identity_list = []
+    with open(identityfile,'r') as f:
+        for line in f:
+            line = line.decode('utf-8')
+            line = line.strip(u'\n')
+            seg = line.split(u'\t')
+            while u'' in seg:
+                seg.remove(u'')
+            while u'\n' in seg:
+                seg.remove(u'\n')
+            for i in range(len(seg)):
+                if u'投资人' in seg[i] or u'投资达人' in seg[i]:
+                    seg[i] = u'投资人'
+                elif u'经纪人' in seg[i] or u'操盘手' in seg[i]:
+                    seg[i] = u'经纪人'
+                elif u'作者' in seg[i] or u'作家' in seg[i]:
+                    seg[i] = u'作家'
+                elif u'学者' in seg[i] or u'教授' in seg[i] or u'学家' in seg[i] or u'博士' in seg[i]:
+                    seg[i] = u'学者'   
+                elif u'股评' in seg[i]:
+                    seg[i] = u'股评人'               
+                elif u'财经评论' in seg[i] or u'财经观察' in seg[i] or u'时评' in seg[i]:
+                    seg[i] = u'财经评论员'
+                elif u'主编' in seg[i]:
+                    seg[i] = u'主编' 
+                elif u'分析师' in seg[i] or u'经济师' in seg[i]:
+                    seg[i] = u'分析师'                     
+                elif u'主管' in seg[i] or u'创始人' in seg[i] or u'董事' in seg[i] or u'经理' in seg[i]  or u'經理' in seg[i]\
+                or u'总裁' in seg[i] or u'总监' in seg[i]:
+                    seg[i] = u'公司高管'
+                elif u'微博' in seg[i] or u'名博' in seg[i] or u'博主' in seg[i] or u'账号' in seg[i] or u'主播' in seg[i]:
+                    seg[i] = u'财经知名博主'  
+                elif u'投资' in seg[i]:
+                    seg[i] = u'投资顾问'
+                elif u'公司' in seg[i] or u'法人代表' in seg[i]:
+                    seg[i] = u'职员'  
+ 
+            identity_list.append(seg)
+
+
+    i = 1  
+    for alist in identity_list:
+        j = i+1
+        for blist in identity_list[i:]:
+            jiaoji = list(set(alist).intersection(set(blist)))  
+            with open('C:/Users/yanxin/Desktop/t/cluster_result.txt','a') as f:
+                for x in jiaoji:
+                    f.write("%s\t"%(x.encode('utf-8')))
+                f.write("%s\t%s\t%s\n"%(i,j,len(jiaoji)))
+            j += 1 
+        i += 1
+        
+def pro(filename,path):
+    sent_lst = []
+    doc = read_file(filename)
+    for line in doc:
+        s_collect = []
+        s_collect_new = []
+        s_collect = re.findall(u'[！|,|，|。|\.|...|？|?|!|：|:|~|～|\"|“|”|‘|’|、|;|；|：：]银行股.*?[！|。|\.|...|？|?|!|：|:|~|～|：：]+',line+u'：：')
+        if len(s_collect) > 0: 
+            for s in re.findall(u'.*?[！|,|，|。|\.|...|？|?|!|：|:|~|～|\"|“|”|‘|’|、|;|；|：：]+',line+u'：：'):
+                if s.find(u"银行股") >= 0:    
+                    s_collect_new.append(s)#两种方法都做一下，然后更正
+            sent_lst.append(u' '.join(s_collect_new))
+        else:
+            for s in re.findall(u'.*?[！|。|\.|...|？|?|!|：|:|~|～|：：]+',line+u'：：'):
+                if s.find(u"银行股") >= 0:
+                    s_collect.append(s)        
+            sent_lst.append(u' '.join(s_collect) )
+
+            
+        del s_collect
+    with open(path,'w') as f:
+        for sent in sent_lst:
+            f.write(sent.encode('utf-8')+'\n')
+    
+
+                 
+def process(user_word_file,stop_word_file,target_word_file,sentence_seg,depend_pair_file): 
+    word_for_count = []
+    syntatic_relation_lst = [u'nsubj',u'neg', u'dep',]  
+    os.environ["STANFORD_PARSER"] =  r'D:/Program Files/python/jars/stanford-parser.jar'
+    os.environ["STANFORD_MODELS"] =  r'D:/Program Files/python/jars/stanford-parser-3.7.0-models.jar'
+    parser = StanfordDependencyParser(model_path=u'edu/stanford/nlp/models/lexparser/chinesePCFG.ser.gz')
+    java_path = "D:/Program Files/Java/bin/java.exe"
+    os.environ['JAVAHOME'] = java_path
+    pre_stopwords = [re.compile(ur'@.*?:'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]年'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十][一,二,两,三,四,五,六,七,八,九,十]年'),
+                     re.compile(ur'#.*?#'),re.compile(ur'\d+月份'),re.compile(ur'\d+月'),re.compile(ur'\d+日'),re.compile(ur'\d+年'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]月份'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]月'),
+                     re.compile(ur'周[一,二,两,三,四,五,六,七,日]'),re.compile(ur'星期[一,二,两,三,四,五,六,七,日]'),
+                     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十]'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]个月'),
+                     re.compile(ur'\d+日'),re.compile(ur'\d+号'),re.compile(ur'\d+天'),re.compile(ur'\d+季度'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几]天'),re.compile(ur'@.*?\//'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,上,下]次'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每]级'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,多]家'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,多]股'),
+                     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,多]只'),
+                     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]个'),
+                     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]级'),
+                     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]'),re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]次'),
+                     re.compile(ur'[一,二,两,三,四,多]季度'),
+                     re.compile(ur'\d+%'),re.compile(ur'\d+只'),re.compile(ur'\d+\.\d+'),re.compile(ur'\d+')]
+    stop_dic = []
+    with open(user_word_file,'r') as f:
+        doc = f.readlines()
+    doc[0] = doc[0].strip(codecs.BOM_UTF8)
+    for line in doc:
+        line = line.decode('utf-8')
+        user_word = line.strip('\n').strip()
+        jieba.add_word(user_word)
+    logger.info("use_dic loaded") 
+     
+    with open(stop_word_file,'r') as f:
+        doc = f.readlines()
+    doc[0] = doc[0].strip(codecs.BOM_UTF8)
+    for line in doc:
+        line = line.decode('utf-8')
+        stop_word = line.strip('\n').strip()
+        stop_dic.append(stop_word)    
+    logger.info("stop_dic loaded")   
+   
+    sent_lst = read_file(sentence_seg)
+    i = 1
+    for line in sent_lst[:]:
+        word_list = []
+        target_lst = []
+        temp = line
+        for r in pre_stopwords:
+            try:
+                temp = re.sub(r, u'', temp)
+            except Exception:
+                pass
+        temp_new = jieba.cut(temp)
+        
+        for t in temp_new:
+            if t not in stop_dic and (t!= u'' ) and (t!= u' ') and (t!= u'\n'):
+                word_list.append(t.strip())
+                word_for_count.append(t.strip())  
+
+        '''try:
+            res = list(parser.parse(word_list)) #res是个树图
+            with open(depend_pair_file,'a') as f: 
+                for row in res[0].triples():
+                    f.write("%s\\%s\\%s\t"%(row[0][0].encode('utf-8'),row[1].encode('utf-8'),row[2][0].encode('utf-8')))
+                f.write('\n')
+        except:
+            with open(depend_pair_file,'a') as f: 
+                f.write(str(i)+'\n')'''
+
+         
+        i = i+1         
+        for i in range(len(word_list)):
+            if u'银行股' == word_list[i]:
+                if i == 0 :
+                    try:
+                        target_lst = word_list[i:i+6] 
+                    except:
+                        target_lst = word_list[i:-1]                   
+                elif i > 0:
+                    try:
+                        target_lst = word_list[i-1:i+6]
+                    except:
+                        target_lst = word_list[i-1:-1]                    
+                target_line = u' '.join(target_lst)
+                with open(target_word_file,'a') as f:
+                    f.write(target_line.encode('utf-8')+' ')
+            else:
+                continue    
+        with open(target_word_file,'a') as f:
+            f.write('\n')
+        del word_list     
+        del target_lst
+    #alist = word_count(word_for_count)
+    #save_dir(alist,word_count_file)
+ 
+    
+def sentiment(up_word_file,down_word_file,target_word_file,depend_pair_file,sentiment_file):
+    sentiment_lst = []
+    up_word_lst = read_file(up_word_file)
+    down_word_lst = read_file(down_word_file)
+   
+    '''doc = read_file(depend_pair_file)
+    for line in doc:
+        word_lst = []
+        for word in re.findall(ur'\t(\W+?)\\nsubj\\银行股',line):        
+            word_lst.append(word)
+        for word in re.findall(ur'\t(\W+?)\\dobj\\银行股',line):
+            word_lst.append(word)   
+        up = list(set(up_word_lst).intersection(set(word_lst))) 
+        down = list(set(down_word_lst).intersection(set(word_lst))) 
+
+        if len(up) != 0:
+            sentiment_lst.append(u'1')
+            continue
+        elif len(down) != 0:
+            sentiment_lst.append(u'0')
+            continue
+        else:
+            sentiment_lst.append(u'2')
+            continue
+        
+        del word_lst'''
+    
+    with open(target_word_file,'r') as f:
+        for line in f:
+            line = line.decode('utf-8')
+            word_lst = line.split(u' ')
+            up = list(set(up_word_lst).intersection(set(word_lst))) 
+            down = list(set(down_word_lst).intersection(set(word_lst))) 
+            if u'?' in word_lst or u'？' in word_lst:
+                sentiment_lst.append(u'2')
+                continue
+            elif len(up) != 0:
+                sentiment_lst.append(u'1')
+                continue
+            elif len(down) != 0:
+                sentiment_lst.append(u'0')
+                continue
+            else:
+                sentiment_lst.append(u'2')
+                continue
+                
+    with open(sentiment_file,'w') as f:  
+        for s in sentiment_lst:
+            f.write(s.encode('utf-8')+'\n')     
+                 
+def sentiment_count():
+    df = pd.read_csv('C:/Users/yanxin/Desktop/t/sentiment.csv', encoding='utf-8',index_col = 'time')
+    df.index = pd.to_datetime(df.index)
+    ts = df[u'sentiment']
+    startTime = '2014-01-01'
+    endTime = '2014-01-31'
+    while startTime != '2016-11-01':     
+        alist =  ts[startTime:endTime]
+        print len(alist)
+        blist = collections.Counter(alist) 
+        blist =  blist.items()
+        blist = sorted(blist,key = lambda x:x[0])  
+        with open('C:/Users/yanxin/Desktop/t/tmp.txt','a') as f:
+            for item in blist:
+                f.write("%s\t"%item[1])
+            f.write('\n') 
+         
+        startTime_tmp = datetime.datetime.fromtimestamp((time.mktime(time.strptime(startTime, "%Y-%m-%d"))))
+        startTime_tmp = startTime_tmp + dateutil.relativedelta.relativedelta(months = 1)
+        startTime = startTime_tmp.strftime("%Y-%m-%d")
+        endTime_tmp = startTime_tmp + dateutil.relativedelta.relativedelta(months = 1) - dateutil.relativedelta.relativedelta(days = 1)
+        endTime = endTime_tmp.strftime("%Y-%m-%d")
+        #print endTime
+
+
+def price_count():
+    df = pd.read_csv('C:/Users/yanxin/Desktop/t/Price.csv', encoding='utf-8', index_col='time')
+    df.index = pd.to_datetime(df.index)
+    print df.head()
+    
+    ts = df[u'price']
+    startTime = '2014-01-01'
+    endTime = '2014-01-31'
+    while startTime != '2016-11-01': 
+        total = 0    
+        alist =  ts[startTime:endTime]
+        print len(alist)
+        for p in alist:
+            total += p
+        with open('C:/Users/yanxin/Desktop/t/tmp.txt','a') as f:
+            f.write("%s\n"%total)    
+        startTime_tmp = datetime.datetime.fromtimestamp((time.mktime(time.strptime(startTime, "%Y-%m-%d"))))
+        startTime_tmp = startTime_tmp + dateutil.relativedelta.relativedelta(months = 1)
+        startTime = startTime_tmp.strftime("%Y-%m-%d")
+        endTime_tmp = startTime_tmp + dateutil.relativedelta.relativedelta(months = 1) - dateutil.relativedelta.relativedelta(days = 1)
+        endTime = endTime_tmp.strftime("%Y-%m-%d")
+        #print endTime        
+        
+def sentiment_classify(up_word_file,down_word_file,target_word_file):
+    corpus = []
+    up_word_lst = read_file(up_word_file)
+    down_word_lst = read_file(down_word_file)
+    with open(target_word_file,'r') as f:
+        for line in f:
+            tmp = []
+            line = line.decode('utf-8')
+            word_lst = line.split(u' ')
+            up = list(set(up_word_lst).intersection(set(word_lst))) 
+            down = list(set(down_word_lst).intersection(set(word_lst))) 
+            tmp = up + down
+            tmp_new = u' '.join(tmp)
+            corpus.append(tmp_new)
+            del tmp
+
+    count_vectorizer = CountVectorizer(analyzer=u'word')#ngram可以更改
+    feature = count_vectorizer.fit_transform(corpus)
+    #feature = weight.toarray()
+    return feature
+
+
+def naive_bayes_classifier(train_x,train_y_file):  
+    from sklearn.naive_bayes import MultinomialNB
+    model = MultinomialNB(alpha=0.1)  
+    train_y = read_file(train_y_file)
+    model.fit(train_x, train_y) 
+    return model
+            
+
+def SVM_classifier(train_x,train_y_file):  
+    from sklearn.svm import SVC
+    model = SVC(kernel='rbf', probability=True)  
+    train_y = read_file(train_y_file)
+    model.fit(train_x, train_y) 
+    return model    
+    
+# KNN Classifier  
+def knn_classifier(train_x, train_y_file):    
+    from sklearn.neighbors import KNeighborsClassifier    
+    train_y = read_file(train_y_file)
+    model = KNeighborsClassifier()    
+    model.fit(train_x, train_y)    
+    return model 
+
+def decision_tree_classifier(train_x,train_y_file):    
+    from sklearn import tree    
+    train_y = read_file(train_y_file)
+    model = tree.DecisionTreeClassifier()    
+    model.fit(train_x, train_y)    
+    return model 
+            
+def read_file(file_name):
+    alist = []
+    with open(file_name,'r') as f:
+        doc = f.readlines()
+    doc[0] = doc[0].strip(codecs.BOM_UTF8) 
+    for line in doc:
+        line = line.decode('utf-8','ignore')
+        word = line.strip().strip(u'\n')
+        alist.append(word)   
+    return alist              
+                
+def word_count(filename): 
+    stop_dic = []
+    word_list = []
+    pre_stopwords = [re.compile(ur'@.*?:'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]年'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十][一,二,两,三,四,五,六,七,八,九,十]年'),
+     re.compile(ur'#.*?#'),re.compile(ur'\d+月份'),re.compile(ur'\d+月'),re.compile(ur'\d+日'),re.compile(ur'\d+年'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]月份'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]月'),
+     re.compile(ur'周[一,二,两,三,四,五,六,七,日]'),re.compile(ur'星期[一,二,两,三,四,五,六,七,日]'),
+     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十]'),re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十]个月'),
+     re.compile(ur'\d+日'),re.compile(ur'\d+号'),re.compile(ur'\d+天'),re.compile(ur'\d+季度'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几]天'),re.compile(ur'@.*?\//'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,上,下]次'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每]级'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,多]家'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,多]股'),
+     re.compile(ur'[一,二,两,三,四,五,六,七,八,九,十,几,每,多]只'),
+     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]个'),
+     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]级'),
+     re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]'),re.compile(ur'第[一,二,两,三,四,五,六,七,八,九,十,几]次'),
+     re.compile(ur'[一,二,两,三,四,多]季度'),
+     re.compile(ur'\d+%'),re.compile(ur'\d+只'),re.compile(ur'\d+\.\d+')]
+    
+    with open(user_word_file,'r') as f:
+        doc = f.readlines()
+    doc[0] = doc[0].strip(codecs.BOM_UTF8)
+    for line in doc:
+        line = line.decode('utf-8')
+        user_word = line.strip('\n').strip()
+        jieba.add_word(user_word)
+    logger.info("use_dic loaded") 
+     
+    with open(stop_word_file,'r') as f:
+        doc = f.readlines()
+    doc[0] = doc[0].strip(codecs.BOM_UTF8)
+    for line in doc:
+        line = line.decode('utf-8')
+        stop_word = line.strip('\n').strip()
+        stop_dic.append(stop_word)    
+    logger.info("stop_dic loaded")
+    
+    doc = read_file(filename)
+    for line in doc:
+        for s in re.findall(u'.*?[！|。|\.|...|？|?|!|~|～|：：]+',line+u'：：'):
+            temp = s
+            for r in pre_stopwords:
+                try:
+                    temp = re.sub(r, u'', temp)
+                except Exception:
+                    pass
+            temp_new = jieba.cut(temp)
+            for t in temp_new:
+                if t not in stop_dic and (t!= u'' ) and (t!= u' ') and (t!= u'\n'):
+                    word_list.append(t.strip())
+            
+    alist = collections.Counter(word_list) 
+    alist =  alist.items() 
+    alist = sorted(alist,key = lambda x:x[1] ,reverse = True)     
+    return alist 
+
+           
+def save_dir(alist,path):
+    with open(path,'w') as f:
+        for a in alist:
+            f.write("%s\t%s\n"%(a[0].encode('utf-8'),a[1]))            
+  
+            
+def fan_info(url_home_file):
+    follow_list = []
+    fan_list = []
+    weibo_list = []
+    id_list = []
+    
+    headers = {'Cookie':'SINAGLOBAL=8273386205546.558.1460128324335; __utma=15428400.1364823105.1479111185.1479111185.1479343507.2; __utmz=15428400.1479111185.1.1.utmcsr=weibo.com|utmccn=(referral)|utmcmd=referral|utmcct=/yhsm8888; wb_publish_fist100_2576386382=1; wb_publish_fist100_2576129214=1; un=961220322@qq.com; wvr=6; YF-Ugrow-G0=56862bac2f6bf97368b95873bc687eef; SCF=AufIer3QhTg4v0tmiNduCmU1JxLtXGm3uliJC8VW4k35mtz7q5-o-QxpQMeKZna7L3sBkMLp7AAdShCnMzkOxJc.; SUB=_2A251M_mHDeTxGeRL7FQQ8ifOyjiIHXVWSWxPrDV8PUNbmtBeLRijkW9NSF5y3cuzvhMSnmHTX4YoKVg9oQ..; SUBP=0033WrSXqPxfM725Ws9jqgMF55529P9D9Whkn1dq2K.p0GIXvKFFTpiB5JpX5KzhUgL.FozfS0qpeo.EeKB2dJLoIpD7qgi4i--fi-zpiKnfi--fi-20i-8FP0qN15tt; SUHB=08Jqj8xuIxv81F; ALF=1511570774; SSOLoginState=1480034775; YF-V5-G0=447063a9cae10ef9825e823f864999b0; _s_tentry=login.sina.com.cn; Apache=6465204546693.713.1480034775543; ULV=1480034775552:49:37:15:6465204546693.713.1480034775543:1479996008381; YF-Page-G0=ee5462a7ca7a278058fd1807a910bc74; UOR=www.doc88.com,widget.weibo.com,123.sogou.com'}
+
+    with open(url_home_file) as f:
+        for line in f:
+            url_final = line.strip('\n')
+
+            req = urllib2.Request(url_final,None,headers = headers)
+            response = urllib2.urlopen(req)
+            data = response.read()
+            lines = data.splitlines()
+            for line in lines:
+                if line.startswith('$CONFIG[\'page_id\']'):
+                    id = re.findall(r'\$CONFIG\[\'page_id\']=\'(.*?)\'',line)[0]
+                    id_list.append(id)
+                    #print id
+                    break
+            for line in lines:
+                if line.startswith('<script>FM.view({"ns":"","domid":"Pl_Core_T8CustomTriColumn'):           
+                    fan_info = line.decode('utf-8')#把要找的那行找出来
+                    break
+              
+            
+            n = fan_info.find('html":"')
+            fan_info_pro = fan_info[n + 7: -12].encode("utf-8").replace('\\','')  
+            soup = BeautifulSoup(fan_info_pro,'html.parser')
+            tmp =  soup.text.strip().strip('\n')
+            fan_data = re.findall(r'\d+',tmp)
+            
+            follow_list.append(fan_data[0])
+            fan_list.append(fan_data[1])
+            weibo_list.append(fan_data[2])
+            
+            
+            with open('C:/Users/yanxin/Desktop/t/weibo_data.txt','a') as f:
+                    f.write("%s\t%s\t%s\t%s\n" % (id,fan_data[0],fan_data[1],fan_data[2]))
+  
+  
+               
+def user_info(pageid_file):
+    headers = {'Cookie':'SINAGLOBAL=8273386205546.558.1460128324335; __utma=15428400.1364823105.1479111185.1479343507.1481368588.3; __utmz=15428400.1479111185.1.1.utmcsr=weibo.com|utmccn=(referral)|utmcmd=referral|utmcct=/yhsm8888; un=961220322@qq.com; wvr=6; SCF=AufIer3QhTg4v0tmiNduCmU1JxLtXGm3uliJC8VW4k35A7C2ZHAYwbkPnxNEfEHgTZAokr6MJnmu-gSFA-hB1_o.; SUB=_2A251boTMDeRxGeRL7FQS-CjPwz6IHXVWHfEErDV8PUNbmtBeLXnhkW-EiD-35wXtMEY5BdZBkgna19jfLA..; SUBP=0033WrSXqPxfM725Ws9jqgMF55529P9D9WF7oTi8FWGXuwZ8Zs0iRAhq5JpX5KMhUgL.FozfS0q01hq01hz2dJLoI0YLxK.L1K2LB-zLxKBLB.zL1KBLxKnLB.qL1K.LxK-LB-BLBKqLxKqL1-eL1-qLxK-LB.-L1hnLxK-LB.qL1K.t; SUHB=0z1BzwcOjIb1ec; ALF=1514940439; SSOLoginState=1483404444; YF-Ugrow-G0=1eba44dbebf62c27ae66e16d40e02964; YF-V5-G0=c37fc61749949aeb7f71c3016675ad75; _s_tentry=123.sogou.com; UOR=www.doc88.com,widget.weibo.com,123.sogou.com; Apache=7448764618020.505.1483405483102; ULV=1483405483120:62:1:1:7448764618020.505.1483405483102:1483088450694; VOTE-G0-YF=0d05d7ac926902576d6368f517cdde98'}
+
+    with open(pageid_file) as f:
+        for line in f:
+            idd = line.strip('\n')
+            url_final = 'http://weibo.com/p/'+idd+'/info?mod=pedit_more'
+            print url_final
+            req = urllib2.Request(url_final,None,headers = headers)
+            response = urllib2.urlopen(req)
+            data = response.read()
+            lines = data.splitlines()
+
+            for line in lines:
+                if line.startswith('<script>FM.view({"ns":"","domid":"Pl_Official_PersonalInfo'):           
+                    user_info = line.decode('utf-8')#把要找的那行找出来
+                    break
+              
+            
+            n = user_info.find('html":"')
+            user_info_pro = user_info[n + 7: -12].encode("utf-8").replace('\/','/')
+
+            soup = BeautifulSoup(user_info_pro, 'html.parser')
+            a = soup.text.strip()
+        
+            nickname = re.findall(ur'\\t昵称：(.*?)\\r',a)[0]
+            print nickname
+            region = re.findall(ur'\\t所在地：(.*?)\\r',a)[0]
+            gender = re.findall(ur'\\t性别：(.*?)\\r',a)[0]
+ 
+            
+            with open('C:/Users/yanxin/Desktop/t/weibo_data.txt','a') as f:
+                f.write("%s\t%s\t%s\n" % (nickname.encode('utf-8'),region.encode('utf-8'),gender.encode('utf-8')))
+
+            time.sleep(0.1*random.randint(40,60))
+
+
+def getURL(keyword,startTime,endTime):
+    begin_url = 'http://s.weibo.com/weibo/'
+    url_pre = begin_url+keyword+"&category=5&suball=1&timescope=custom:"+startTime+":"+endTime+"&page="  
+    return url_pre
+
+
+def DataCollection():   
+    name_list = []
+    content_list = []
+    forward_list = []
+    comment_list = []
+    like_list = []
+    headers = {'Cookie':'SINAGLOBAL=8273386205546.558.1460128324335; __utma=15428400.1364823105.1479111185.1479111185.1479343507.2; __utmz=15428400.1479111185.1.1.utmcsr=weibo.com|utmccn=(referral)|utmcmd=referral|utmcct=/yhsm8888; wb_publish_fist100_2576386382=1; YF-Ugrow-G0=3a02f95fa8b3c9dc73c74bc9f2ca4fc6; login_sid_t=8e6327bddbffec7e93e3e0a37901c3f9; YF-V5-G0=bb389e7e25cccb1fadd4b1334ab013c1; _s_tentry=-; Apache=9029888119548.559.1479914409983; ULV=1479914409996:46:34:12:9029888119548.559.1479914409983:1479908060746; YF-Page-G0=b5853766541bcc934acef7f6116c26d1; appkey=; WBStorage=2c466cc84b6dda21|undefined; SSOLoginState=1479974601; UOR=www.doc88.com,widget.weibo.com,login.sina.com.cn; SCF=AufIer3QhTg4v0tmiNduCmU1JxLtXGm3uliJC8VW4k35v8iCfCxJdZFXS7wNN-6RWW6dKKak96s2tMHXyP-p-k8.; SUB=_2A251MtBLDeTxGeRL7FQQ8ifOyjiIHXVWRkaDrDV8PUNbmtBeLXn8kW-gElyM1RjAcptKQD-1_7vJT5iYSQ..; SUBP=0033WrSXqPxfM725Ws9jqgMF55529P9D9Whkn1dq2K.p0GIXvKFFTpiB5JpX5K2hUgL.FozfS0qpeo.EeKB2dJLoIpD7qgi4i--fi-zpiKnfi--fi-20i-8FP0qN15tt; SUHB=0id6xtbsAuOZ8g; ALF=1511510939; un=yx_sysu@163.com; wvr=6'}
+    keyword = "%25E8%2582%25A1%25E5%25B8%2582" 
+    startTime = "2014-12-15-0"
+    endTime = "2014-12-15-23"    
+    hasMore = True
+    isCaught = False    
+    while startTime != "2014-12-17-00" and (not isCaught):
+        i = 1
+        hasMore = True
+        isCaught = False
+        url_pre = getURL(keyword,startTime,endTime)
+        while hasMore and i<51 and (not isCaught):
+            url_final = url_pre + str(i) 
+            data = ''
+            goon = True #中断标志
+            logger.info( "present_final_url:%s"%(url_final))
+       
+            for tryNum in range(2):  
+                try:  
+                    req = urllib2.Request(url_final,headers=headers)
+                    response = urllib2.urlopen(req)
+                    data = response.read()
+                    break
+                except:
+                    if tryNum < 1:  
+                        time.sleep(10) 
+                    else:                      
+                        logger.info('url: ' + url_final)
+                        logger.info('page:' + str(i))
+                        goon = False
+                        
+            if goon:             
+                isCaught = True
+                lines = data.splitlines()
+                for line in lines:
+                    if line.startswith('<script>STK && STK.pageletM && STK.pageletM.view({"pid":"pl_weibo_direct"'):  
+                        isCaught = False
+                        info = line.decode('utf-8')#把要找的那行找出来
+                        break
+                n = info.find('html":"')
+                if n > 0:
+                    info_pro = info[n + 7: -12].encode("utf-8").decode('unicode_escape').encode("utf-8").replace("\\", "")  
+                
+                    if (info_pro.find('<div class="search_noresult">') > 0):  
+                            hasMore = False
+                    
+                    else:           
+                        info_lines = info_pro.split('<a class="W_texta W_fb"')  
+                        for line in info_lines[1:]:
+                            name_pattern = r'<p class="comment_txt" node-type="feed_list_content" nick-name="(?P<name>.+?)">'
+                            content_pattern = r'<p class="comment_txt" node-type="feed_list_content" nick-name=.*\n.*\n.*>'
+                            forward_pattern = r'weibo_ss_.*?_z"><span class="line S_line1">转发<em>(\d+)</em>'
+                            comment_pattern = r'weibo_ss_.*?_p"><span class="line S_line1">评论<em>(\d+)</em>'
+                            like_pattern = r'weibo_ss_.*?_zan"><span class="line S_line1"><i class="W_ico12 icon_praised_b"></i><em>(\d+)</em>'
+                            time_pattern = r'weibo_ss_.*?_time" >(\d+-\d+-\d+ \d+:\d+)</a>'
+                            #time_pattern = r'weibo_ss_.*?_time" >(\d+月\d+日 \d+:\d+)</a>' 
+                            #print line
+                            name = re.findall(name_pattern,line)
+                            content = re.findall(content_pattern,line)
+                            forward = re.findall(forward_pattern, line)
+                            comment = re.findall(comment_pattern, line)
+                            like = re.findall(like_pattern,line)
+                            pubtime = re.findall(time_pattern,line)
+                            #print name[0]
+                            #name_list.append(name[0])
+                            na = name[0]
+                            #内容
+                            if len(content) != 0:
+                                soup = BeautifulSoup(content[0],'html.parser')
+                                content_pro = soup.text
+                                #print content_pro.strip()                            
+                                #content_list.append(content_pro.strip())
+                                c = content_pro.strip() 
+                            else:
+                                #content_list.append("NULL")
+                                c = "NULL"
+                            #转发
+                            if len(forward) != 0:
+                                #print forward[0]
+                                #forward_list.append(forward[0])
+                                fo = forward[0]
+                            else:
+                                #print 0
+                                #forward_list.append('0')
+                                fo = '0'
+                            #评论数
+                            if len(comment) != 0:
+                                #print comment[0]
+                                #comment_list.append(comment[0])
+                                p = comment[0]
+                            else:
+                                #print 0 
+                                #comment_list.append('0')   
+                                p = '0'
+                            #点赞数      
+                            if len(like) != 0:
+                                #print like[0]
+                                #like_list.append(like[0])
+                                l = like[0]
+                            else:
+                                #print 0   
+                                #like_list.append('0')
+                                l = '0'
+                            tm = pubtime[0]
+                            #tm = '2016-'+ pubtime[0]
+                            with open('C:/Users/yanxin/Desktop/t/out1.txt','a') as f:
+                                f.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (na.decode('utf-8').encode('utf-8'),c.encode('utf-8'),fo.encode('utf-8'),p.encode('utf-8'),l.encode('utf-8'),tm.decode('utf-8').encode('utf-8')))
+                                #f.write("%s\t\n" % (tm.encode('utf-8')))
+
+                                         
+            if isCaught:  
+                print 'Be Caught!'  
+                logger.error('Be Caught Error!')  
+                logger.info('url: ' + url_final)  
+                logger.info('page:' + str(i))  
+                time.sleep(random.randint(60,80)) 
+                data = None  
+                break
+            
+            i = i+1 
+            time.sleep(0.1*random.randint(120,200)) 
+            
+        if not hasMore:  
+            logger.info('No More Results!')
+            logger.info('this page no content:%s'%(url_final))  
+            start_date = datetime.datetime.fromtimestamp(time.mktime(time.strptime(startTime, "%Y-%m-%d-%H")))
+            end_date = datetime.datetime.fromtimestamp(time.mktime(time.strptime(endTime, "%Y-%m-%d-%H")))
+            threshood = datetime.timedelta(days = 1)
+            start_new= start_date+threshood
+            end_new = end_date + threshood
+            startTime = start_new.strftime("%Y-%m-%d-%H")   
+            endTime = end_new.strftime("%Y-%m-%d-%H")  
+
+    
+    
+def LDAModel(trainfile):  
+    corpus = []
+    with open(trainfile, 'r') as f:
+        docs = f.readlines()
+    for line in docs:
+        line = line.decode('utf-8')
+        if line != u"":  
+            tmp = line.strip().split()
+            corpus.append(tmp)
+    word_dict =corpora.Dictionary(corpus) #词典，每个词对应一个编号
+    corpus_list = [word_dict.doc2bow(text) for text in corpus] ##向量空间模型，词频统计
+    model =models.ldamodel.LdaModel(corpus= corpus_list,id2word=word_dict, num_topics=3)
+    for pattern in model.show_topics():  
+        print "%s\t%s" % (pattern[0],pattern[1].encode('utf-8') )
+
+
+if __name__ == "__main__":
+
+    logger = logging.getLogger('main')  
+    logFile = 'C:/Users/yanxin/Desktop/t/collect.log'  
+    logger.setLevel(logging.DEBUG)  
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s: %(message)s') 
+    filehandler = logging.FileHandler(logFile)
+    filehandler.setFormatter(formatter)  
+    logger.addHandler(filehandler)    
+    
+    pageid_file =  'C:/Users/yanxin/Desktop/t/pageid.txt' 
+    #identityfile = 'C:/Users/yanxin/Desktop/t/identification.txt' 
+    content_file = 'C:/Users/yanxin/Desktop/t/content.txt'
+    sentence_seg = 'C:/Users/yanxin/Desktop/t/sent_seg.txt'
+    user_word_file = 'C:/Users/yanxin/Desktop/t/user_dic.txt' 
+    stop_word_file = 'C:/Users/yanxin/Desktop/t/stop_word.txt' 
+    word_count_file = 'C:/Users/yanxin/Desktop/t/word_count.txt' 
+    depend_pair_file = 'C:/Users/yanxin/Desktop/t/depend_pair.txt'
+    target_word_file = 'C:/Users/yanxin/Desktop/t/target_word.txt' 
+    up_word_file = 'C:/Users/yanxin/Desktop/t/up.txt'
+    down_word_file = 'C:/Users/yanxin/Desktop/t/down.txt'
+    predict_file = 'C:/Users/yanxin/Desktop/t/predict.txt'
+    train_y_file = 'C:/Users/yanxin/Desktop/t/tagging.txt'
+    
+    #DataCollection()
+    #fan_info(url_home_file)
+    user_info(pageid_file)
+    #classify(identityfile)
+    
+    #alist = word_count(content_file)
+    #save_dir(alist, word_count_file)
+    
+    #pro(content_file,sentence_seg)
+    #process(content_file, user_word_file, stop_word_file, word_count_file)
+    #process(user_word_file, stop_word_file, target_word_file ,sentence_seg, depend_pair_file)
+    #sentiment(up_word_file,down_word_file,target_word_file,depend_pair_file,predict_file)
+    #sentiment_count()
+    #price_count()
+
+  
+
+
